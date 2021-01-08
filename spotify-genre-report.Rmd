@@ -1,0 +1,364 @@
+---
+title: "spotify-genre-report"
+author: "Jo Leung"
+date: "06/01/2021"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r library setup, include=FALSE}
+##########################################################
+# setup necessary library
+##########################################################
+
+# Note: this process could take a couple of minutes
+
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+if(!require(data.table)) install.packages("data.table", repos = "http://cran.us.r-project.org")
+if(!require(lubridate)) install.packages("lubridate", repos = "http://cran.us.r-project.org")
+
+library(tidyverse)
+library(caret)
+library(data.table)
+library(lubridate)
+
+options(dplyr.summarise.inform = FALSE)
+```
+
+## Introduction
+
+We are tasked with an individual project to demonstrate our ability to apply machine learning techniques on publicly available datasets.
+
+I've chosen to use the "Dataset of songs in Spotify" available from Kaggle which consists of audio features of songs provided by Spotify and the task is to use these features to predict the genre of the song.
+
+Here's a link to the dataset:
+
+https://www.kaggle.com/mrmorj/dataset-of-songs-in-spotify
+
+We will be attempting different machine learning algorithms to achieve this.
+
+## Analysis
+
+We first examine the dataset and perform data wrangling and data visualization on the dataset to gain more insight to the features available to us and prepare the data for machine learning.
+
+### Data Wrangling
+
+Import the dataset into an object "spotify" from the excel sheet to RStudio, the file is saved in the same working directory as the script so relative path is used.
+
+```{r data import, include=TRUE}
+
+spotify <- read.csv("genres_v2.csv")
+```
+
+We then examine the dataset with the head and summary functions:
+
+```{r examine dataset, echo = FALSE}
+
+head(spotify)
+
+summary(spotify)
+```
+
+From these tables, we can see that the type, id, uri, track_href, analysis_url, title, unnamed title columns are not very useful for us, hence we will be removing those columns and use the remaining features to predict the genre.
+
+```{r keeping useful features, include = TRUE}
+
+spotify <- spotify %>%
+  select(danceability, energy, key, loudness, speechiness, acousticness, instrumentalness, liveness, valence, tempo, duration_ms, time_signature, genre)
+```
+
+```{r display dataset, echo = FALSE}
+head(spotify)
+```
+
+### Data visualization
+
+We now use data visualization techniques to explore the dataset visually. FIrst we look at the genre distribution,
+
+```{r genre distribution, include = TRUE}
+
+#investigate genre distribution
+spotify %>%
+  group_by(genre) %>%
+  ggplot(aes(genre)) +
+  geom_bar(fill = "red", color = "black") +
+  coord_flip()
+```
+
+We can see a list of the genres that are present in the dataset, it is worth noting that the genres in the dataset are not evenly distributed with a lot of the songs belonging to the Underground Rap genre and very few belong to the Pop genre.
+
+We then examine the tempo distribution and average tempo by genre
+
+```{r tempo distribution, include = TRUE}
+
+#investigate tempo distribution by genre
+spotify %>%
+  group_by(genre) %>%
+  ggplot(aes(genre, tempo)) +
+  geom_boxplot()
+
+#investigate the average tempo by genre
+spotify %>%
+  group_by(genre) %>%
+  summarise(mean_tempo = mean(tempo)) %>%
+  arrange(desc(mean_tempo))
+```
+
+The tempo/mean tempo distribution provide an interesting insight as some genres (techhouse) have very small inter quartile ranges whilst genres like pop has large inter quartile ranges. Furthermore, there is quite a range when exploring the mean tempo, varying from 125.techhouse to 174.dnb which can be a good predictor for genres.
+
+We then examine the energy distribution and average energy by genre
+
+```{r energy distribution, include = TRUE}
+#investigate energy distribution by genre
+spotify %>%
+  group_by(genre) %>%
+  ggplot(aes(genre, energy)) +
+  geom_boxplot()
+
+#investigate the average energy level by genre
+spotify %>%
+  group_by(genre) %>%
+  summarise(mean_energy = mean(energy)) %>%
+  arrange(desc(mean_energy))
+```
+
+The energy level distribution is more condense as all genres have an average above 0.5.
+
+We also look at danceability, valence, loudness and duration distributions by genre:
+
+```{r feature distributions, echo = FALSE}
+#investigate danceability distribution by genre
+spotify %>%
+  group_by(genre) %>%
+  ggplot(aes(genre, danceability)) +
+  geom_boxplot()
+
+#investigate valence distribution by genre
+spotify %>%
+  group_by(genre) %>%
+  ggplot(aes(genre, valence)) +
+  geom_boxplot()
+
+#investigate loudness distribution by genre
+spotify %>%
+  group_by(genre) %>%
+  ggplot(aes(genre, loudness)) +
+  geom_boxplot()
+
+#investigate duration distribution by genre
+spotify %>%
+  group_by(genre) %>%
+  ggplot(aes(genre, duration_ms)) +
+  geom_boxplot()
+```
+
+From the plots, we can see that danceability, valence are more distributed between genres than loudness and duration, suggesting they are stronger predictors for analysis later.
+
+### Separating training, test, and validation dataset
+
+We then move on to creating training, test and validation dataset from the spotify dataset. The validation dataset is strictly used for evaluation only and was not used for training in any way. When working on different algorithms, training dataset is used to train our algorithm and tested on the test dataset.
+
+The validation dataset consists of 20% of the spotify dataset, the remaining 80% is distributed as follows: training 80%, testing 20%.
+
+As the original spotify dataset consists of 42305 observations (songs) it allows for 20% going to the validation dataset as we have enough observations for training. I avoided splitting it into 90%:10% as that will increase computational cost and time.
+
+During the training process, the algorithms are evaluated on the test set.
+
+Later in the report, the final evaluation will be performed on the validation dataset, which was not used in the training process in any way.
+
+```{r dataset split, include = TRUE}
+set.seed(7, sample.kind = "Rounding")
+
+verify_index <- createDataPartition(spotify$genre, times = 1, p = 0.2, list = FALSE)
+analysis <- spotify[-verify_index,]
+temp <- spotify[verify_index,]
+
+validation <- temp %>%
+  semi_join(analysis, by = "genre")
+
+removed <- anti_join(temp, validation)
+analysis <- rbind(analysis, removed)
+
+set.seed(7, sample.kind = "Rounding")
+
+test_index <- createDataPartition(analysis$genre, times = 1, p = 0.2, list = FALSE)
+training_set <- analysis[-test_index,]
+test_set <- analysis[test_index,]
+
+rm(removed, temp, verify_index, analysis, test_index)
+```
+
+### Machine learning
+
+We will be using a range of machine learning algorithms to predict the genre of the song using the audio features available to us.
+
+THe machine learning algorithms that we will use are:
+
+Linear discriminant analysis (LDA)
+Quadratic discriminant analysis (QDA)
+k-nearest neighbour algorithm (kNN)
+Random forest (rf)
+
+#### Model 1 | LDA model
+
+We first try a LDA model:
+
+```{r set seed 1, include = FALSE}
+set.seed(7, sample.kind = "Rounding")
+```
+
+```{r lda model, include = TRUE}
+train_lda <- train(genre ~ ., data = training_set, method = "lda")
+s_lda <- predict(train_lda, validation)
+mean(validation$genre == s_lda)
+```
+
+#### Model 2 | QDA model
+
+We then try a qda model:
+
+```{r set seed 2, include = FALSE}
+set.seed(7, sample.kind = "Rounding")
+```
+
+```{r qda model, include = TRUE}
+train_qda <- train(genre ~ ., data = training_set, method = "qda")
+s_qda <- predict(train_qda, validation)
+mean(validation$genre == s_qda)
+```
+
+#### Model 3 | Random forest model 1
+
+We now attempt a random forest model with 100 tree nodes:
+
+```{r set seed 3, include = FALSE}
+set.seed(7, sample.kind = "Rounding")
+```
+
+```{r random forest 100, include = TRUE}
+train_rf <- train(genre ~ ., data = training_set, method = "rf",
+                  tuneGrid = data.frame(mtry = seq(1:7)),
+                  ntree = 100)
+
+train_rf$bestTune
+
+s_rf <- predict(train_rf, validation)
+
+mean(s_rf == validation$genre)
+```
+
+We can also observe the variable importance which is why "rf" is used over "rborist".
+
+```{r variable importance 1, include = TRUE}
+varImp(train_rf)
+```
+
+As shown, tempo is the most important variable to predict genre, followed by duration and danceability. It seems time signature has no impact at predicting the genre of the song.
+
+#### Model 4 | Random forest model 2
+
+We now attempt a random forest model with 500 tree nodes to see if it improves the accuracy:
+
+```{r set seed 4, include = FALSE}
+set.seed(7, sample.kind = "Rounding")
+```
+
+```{r random forest 500, include = TRUE}
+train_rf2 <- train(genre ~ ., data = training_set, method = "rf",
+                  tuneGrid = data.frame(mtry = seq(1:7)),
+                  ntree = 500)
+
+train_rf2$bestTune
+
+s_rf2 <- predict(train_rf2, validation)
+
+mean(s_rf2 == validation$genre)
+```
+
+again we observe the variable importance.
+
+```{r variable importance 2, include = TRUE}
+varImp(train_rf2)
+```
+
+The variable importance is the same as our previous random forest model.
+
+#### Model 5 | KNN model - All predictors
+
+We then apply the KNN model using all the predictors available to us and optimise for number of neighbours:
+
+```{r set seed 5, include = FALSE}
+set.seed(7, sample.kind = "Rounding")
+```
+
+```{r KNN all predictors, include = TRUE}
+train_knn <- train(genre ~ ., data = training_set, method = "knn",
+                   tuneGrid = data.frame(k = seq(1, 51, 2)),
+                   trControl = trainControl(method = "cv", number=10, p=0.9))
+
+train_knn$bestTune
+
+ggplot(train_knn)
+
+s_knn <- predict(train_knn, validation)
+
+mean(s_knn == validation$genre)
+```
+
+Interestingly, this variation of kNN model performed very poorly, worst than both LDA and QDA, a likely cause can be due to the nature of the predictors, we will attempt to use only a subset of the predictors, in particular the "important" variables we obtained from the random forest model earlier which are:
+
+tempo + duration + danceability + instrumentalness + loudness
+
+#### Model 6 | kNN model - important variable
+
+An interesting observation, when duration is used as a predictor, the accuracy is still as low as 0.3391908, but when duration is removed as a predictor, we achieved a better accuracy:
+
+```{r set seed 6, include = FALSE}
+set.seed(7, sample.kind = "Rounding")
+```
+
+```{r KNN important variables, include = TRUE}
+train_knn2 <- train(genre ~ tempo + danceability + instrumentalness + loudness, data = training_set, method = "knn",
+                   tuneGrid = data.frame(k = seq(1, 51, 2)),
+                   trControl = trainControl(method = "cv", number=10, p=0.9))
+
+train_knn2$bestTune
+
+ggplot(train_knn2)
+
+s_knn2 <- predict(train_knn2, validation)
+
+mean(s_knn2 == validation$genre)
+
+```
+
+## Results
+
+Here are our final results applying the trained algorithms on the validation set:
+
+```{r results, echo = FALSE}
+results <- tibble(Method = "LDA model", Accuracy = mean(validation$genre == s_lda))
+results <- bind_rows(results, tibble(Method = "QDA model", Accuracy = mean(validation$genre == s_qda)))
+results <- bind_rows(results, tibble(Method = "Random forest model (100 nodes)", Accuracy = mean(validation$genre == s_rf)))
+results <- bind_rows(results, tibble(Method = "Random forest model (500 nodes)", Accuracy = mean(validation$genre == s_rf2)))
+results <- bind_rows(results, tibble(Method = "kNN model - all predictors", Accuracy = mean(validation$genre == s_knn)))
+results <- bind_rows(results, tibble(Method = "kNN model - important variable", Accuracy = mean(validation$genre == s_knn2)))
+
+results %>%
+  arrange(desc(Accuracy))
+```
+
+The best performing algorithm is the random forest models, with 0.668 and 0.663 accuracy respectively for 100 and 500 nodes.
+
+The kNN model have relatively low accuracy which is unexpected as the QDA model outperforms it by a margin.
+
+## Conclusion
+
+We have attempted to use different machine learning algorithms to predict the genre of songs from a Spotify dataset, using audio features available to us as predictors.
+
+There are some interesting observations, such as the negative impact of "duration" as a predictor on a kNN model, and tempo being the best predictor for genre according to the variable importance from random forest model.
+
+One of the reason why the accuracy across different models are lower than expected is because the genre distribution are not evenly distributed and a lot of the genres in the dataset have overlapping similarities, as demonstrated from the data visualization earlier with a lot of features overlapping in ranges, with very few distinct features to separate the songs. 
+
